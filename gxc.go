@@ -26,3 +26,7 @@ http://github.com/robertkrimen/gxc/gxc
     eval `gxc --bashrc`                                                        
 */
 package gxc
+
+import (
+	_ "github.com/robertkrimen/gxc/gxc"
+)

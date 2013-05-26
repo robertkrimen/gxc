@@ -4,6 +4,7 @@ test: build
 
 build:
 	go build
+	-gxc build-windows-386
 
 install:
 	go install

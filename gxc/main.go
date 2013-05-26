@@ -73,6 +73,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -83,11 +84,34 @@ var (
 )
 
 var (
-	matchKeyValue        = regexp.MustCompile(`(?m)^([^=]+)="(.*)"$`)
+	matchKeyValue        = regexp.MustCompile(`(?m)^(?:set )?([^=]+)=(.*)$`)
+	matchQuote           = regexp.MustCompile(`^(?:"(.*)")|(?:'(.*)')`)
 	matchPlatformQuery   = regexp.MustCompile(`^([0-9a-z*]+)(?:[/\-_]([0-9a-z*]+))?$`)
 	matchCompoundCommand = regexp.MustCompile(`^(setup|build|go)-([0-9a-z\-]+)$`)
 	matchBuiltPackage    = regexp.MustCompile(`(?m)^#\s*\n^#\s*(.*)\s*\n^#\s*\n`)
 )
+
+var (
+	platformUnix = _hostPlatform{
+		runGo:     "go",
+		buildAll:  "all.bash",
+		buildMake: "make.bash",
+	}
+
+	platformWindows = _hostPlatform{
+		runGo:     "go.exe",
+		buildAll:  "all.bat",
+		buildMake: "make.bat",
+	}
+
+	hostPlatform = platformUnix
+)
+
+type _hostPlatform struct {
+	runGo     string
+	buildAll  string
+	buildMake string
+}
 
 var (
 	flag_target       = flag.String("target", "", "The platforms to target (linux, windows/386, etc.)")
@@ -153,38 +177,38 @@ func usage() {
 // # Copyright 2012 The Go Authors. All rights reserved.
 // # Use of this source code is governed by a BSD-style
 // # license that can be found in the LICENSE file.
-// 
+//
 // # support functions for go cross compilation
-// 
+//
 // PLATFORMS="darwin/386 darwin/amd64 freebsd/386 freebsd/amd64 freebsd/arm linux/386 linux/amd64 linux/arm windows/386 windows/amd64"
-// 
+//
 // eval "$(go env)"
-// 
+//
 // function cgo-enabled {
 // 	if [ "$1" = "${GOHOSTOS}" ]; then
 // 		if [ "${GOHOSTOS}" != "freebsd/arm" ]; then
 // 			echo 1
 // 		else
 // 			# cgo is not freebsd/arm
-// 			echo 0	
+// 			echo 0
 // 		fi
-// 	else 
+// 	else
 // 		echo 0
 // 	fi
 // }
-// 
+//
 // function go-alias {
 // 	GOOS=${1%/*}
 // 	GOARCH=${1#*/}
 // 	eval "function go-${GOOS}-${GOARCH} { (CGO_ENABLED=$(cgo-enabled ${GOOS} ${GOARCH}) GOOS=${GOOS} GOARCH=${GOARCH} go \$@ ) }"
 // }
-// 
+//
 // function go-crosscompile-build {
 // 	GOOS=${1%/*}
 // 	GOARCH=${1#*/}
 // 	cd ${GOROOT}/src ; CGO_ENABLED=$(cgo-enabled ${GOOS} ${GOARCH}) GOOS=${GOOS} GOARCH=${GOARCH} ./make.bash --no-clean 2>&1
 // }
-// 
+//
 // function go-crosscompile-build-all {
 // 	FAILURES=""
 // 	for PLATFORM in $PLATFORMS; do
@@ -196,8 +220,8 @@ func usage() {
 // 	    echo "*** go-crosscompile-build-all FAILED on $FAILURES ***"
 // 	    return 1
 // 	fi
-// }	
-// 
+// }
+//
 // function go-all {
 // 	FAILURES=""
 // 	for PLATFORM in $PLATFORMS; do
@@ -212,13 +236,13 @@ func usage() {
 // 	    return 1
 // 	fi
 // }
-// 
+//
 // function go-build-all {
 // 	FAILURES=""
 // 	for PLATFORM in $PLATFORMS; do
 // 		GOOS=${PLATFORM%/*}
 // 		GOARCH=${PLATFORM#*/}
-// 		OUTPUT=`echo $@ | sed 's/\.go//'` 
+// 		OUTPUT=`echo $@ | sed 's/\.go//'`
 // 		CMD="go-${GOOS}-${GOARCH} build -o $OUTPUT-${GOOS}-${GOARCH} $@"
 // 		echo "$CMD"
 // 		$CMD || FAILURES="$FAILURES $PLATFORM"
@@ -228,22 +252,24 @@ func usage() {
 // 	    return 1
 // 	fi
 // }
-// 
+//
 // for PLATFORM in $PLATFORMS; do
 // 	go-alias $PLATFORM
 // done
-// 
+//
 // unset -f go-alias
 
-func environment(with ...string) []string {
-	matchKey := regexp.MustCompile(`^(GOOS|GOARCH|CGO_ENABLED)=`)
-	result := os.Environ()
-	for index, value := range result {
-		if matchKey.MatchString(value) {
-			result[index] = ""
+func environment(override ...string) []string {
+	matchExclude := regexp.MustCompile(`^(GO(?:ARCH|OS)|CGO_ENABLED)=`)
+	// This tmp will be the current environment (excluding matchExclude)
+	tmp := []string(nil)
+	for _, value := range os.Environ() {
+		if matchExclude.MatchString(value) {
+			continue
 		}
+		tmp = append(tmp, value)
 	}
-	return append(result, with...)
+	return append(tmp, override...)
 }
 
 type _platform struct {
@@ -307,30 +333,30 @@ func (self _platform) cgoFlag() string {
 }
 
 func (self _platform) buildCompiler(stdout io.Writer, stderr io.Writer) error {
-	return atPath(filepath.Join(goRoot, "src"), func() error {
-		cmd := exec.Command("./make.bash", "--no-clean")
-		cmd.Env = append(os.Environ(),
-			"GOOS="+self.major,
-			"GOARCH="+self.minor,
-			self.cgoFlag(), // CGO_ENABLED=
-		)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
-		err := cmd.Run()
+
+	cmd := exec.Command(filepath.Join(goRoot, "src", hostPlatform.buildMake), "--no-clean")
+	cmd.Dir = filepath.Dir(cmd.Path)
+	cmd.Env = environment(
+		"GOOS="+self.major,
+		"GOARCH="+self.minor,
+		self.cgoFlag(), // CGO_ENABLED=
+	)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+	{
+		path := self.builtFile()
+		file, err := os.Create(path)
 		if err != nil {
 			return err
 		}
-		{
-			path := self.builtFile()
-			file, err := os.Create(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-			return err
-		}
-	})
+		defer file.Close()
+		return err
+	}
 }
 
 // darwin/386
@@ -345,24 +371,6 @@ func (self _platform) buildCompiler(stdout io.Writer, stderr io.Writer) error {
 
 var registry []_platform
 
-func atPath(path string, do func() error) error {
-	path0, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	err = os.Chdir(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err := os.Chdir(path0)
-		if err != nil {
-			panic(err)
-		}
-	}()
-	return do()
-}
-
 func firstTimeSetup(target []_platform) {
 	for _, platform := range target {
 		// If at least one platform is ready, then return
@@ -372,10 +380,10 @@ func firstTimeSetup(target []_platform) {
 			return
 		}
 	}
-	do_setup(target, nil)
+	doSetup(target, nil)
 }
 
-func do_setup(target []_platform, arguments []string) (failure []_failure) {
+func doSetup(target []_platform, arguments []string) (failure []_failure) {
 	setupFlagSet.Parse(arguments)
 	arguments = setupFlagSet.Args()
 	if len(arguments) > 0 {
@@ -404,7 +412,7 @@ func do_setup(target []_platform, arguments []string) (failure []_failure) {
 			stderr = os.Stderr
 		} else if *setupFlag_quiet {
 		} else {
-			log, _ = ioutil.TempFile("", "make.bash."+platform.major+"-"+platform.minor+".log.")
+			log, _ = ioutil.TempFile("", "make."+platform.major+"-"+platform.minor+".log.")
 			if log != nil {
 				defer log.Close()
 				stdout = log
@@ -450,7 +458,7 @@ func findBuiltName(arguments []string) (name string) {
 	return
 }
 
-func do_build(target []_platform, arguments []string) (failure []_failure) {
+func doBuild(target []_platform, arguments []string) (failure []_failure) {
 	firstTimeSetup(target)
 	name := findBuiltName(arguments)
 
@@ -494,7 +502,7 @@ func do_build(target []_platform, arguments []string) (failure []_failure) {
 	return failure
 }
 
-func do_go(target []_platform, arguments []string) (failure []_failure) {
+func doGo(target []_platform, arguments []string) (failure []_failure) {
 	firstTimeSetup(target)
 	for _, platform := range target {
 		if !platform.isReady() {
@@ -538,7 +546,7 @@ func platformQuery(query string) []_platform {
 	return found
 }
 
-func do_bashrc() {
+func bashrc() {
 	fmt.Fprintf(os.Stdout, kilt.GraveTrim(`
 GXC_TARGET=();
 
@@ -574,10 +582,12 @@ func main() {
 	if os.ExpandEnv("$_GXC_QUIET") == "1" {
 		flag_quiet = true
 	}
+	if runtime.GOOS == "windows" {
+		hostPlatform = platformWindows
+	}
 	err := func() error {
 		{
-			// We want to have a pure go environment, to fix any
-			// fiddling
+			// We want to have a pure go environment, to fix any fiddling
 			// go env:
 			output, err := exec.Command("go", "env").Output()
 			if err != nil {
@@ -586,6 +596,9 @@ func main() {
 			if match := matchKeyValue.FindAllSubmatch(output, -1); match != nil {
 				for _, match := range match[1:] {
 					key, value := string(match[1]), string(match[2])
+					if match := matchQuote.FindStringSubmatch(value); match != nil {
+						value = match[1]
+					}
 					switch key {
 					case "GOROOT":
 						goRoot = value
@@ -612,9 +625,11 @@ func main() {
 					if strings.HasPrefix(name, "defs_") && strings.HasSuffix(name, ".h") {
 						name = name[5 : len(name)-2] // defs_*.h
 						index := strings.Index(name, "_")
+						major := name[0:index]
+						minor := name[index+1:]
 						registry = append(registry, _platform{
-							major: name[0:index],
-							minor: name[index+1:],
+							major: major,
+							minor: minor,
 						})
 					}
 				}
@@ -625,7 +640,7 @@ func main() {
 		}
 
 		if *flag_bashrc {
-			do_bashrc()
+			bashrc()
 		}
 
 		command := flag.Arg(0)
@@ -648,13 +663,13 @@ func main() {
 			switch command {
 			case "build":
 				target = platformQuery(query)
-				failure = do_build(target, arguments)
+				failure = doBuild(target, arguments)
 			case "setup":
 				target = platformQuery(query)
-				failure = do_setup(target, arguments)
+				failure = doSetup(target, arguments)
 			case "go":
 				target = platformQuery(query)
-				failure = do_go(target, arguments)
+				failure = doGo(target, arguments)
 			case "list":
 				for _, platform := range registry {
 					ready := "-"
@@ -664,7 +679,7 @@ func main() {
 					fmt.Fprintf(os.Stdout, "%s %s\n", ready, platform)
 				}
 			case "bashrc":
-				do_bashrc()
+				bashrc()
 			default:
 				return fmt.Errorf("invalid command: %s", command)
 			}

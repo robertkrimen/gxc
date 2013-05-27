@@ -10,7 +10,7 @@ install:
 	go install
 
 clean:
-	rm -f gxc
+	rm -f gxc gxc-*
 
 release:
 	$(MAKE) -C .. $@

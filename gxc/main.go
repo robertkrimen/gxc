@@ -553,6 +553,25 @@ func platformQuery(query string) []_platform {
 	return found
 }
 
+func platformMatch(query []string) ([]_platform, []string) {
+	index := 0
+	match := []_platform{}
+	for _, query := range query {
+		found := platformQuery(query)
+		if len(found) == 0 {
+			break
+		}
+		match = append(match, found...)
+		index += 1
+	}
+	if index < len(query) {
+		query = query[index:]
+	} else {
+		query = []string(nil)
+	}
+	return match, query
+}
+
 func bashrc() {
 	fmt.Fprintf(os.Stdout, kilt.GraveTrim(`
 GXC_TARGET=();
@@ -669,7 +688,14 @@ func main() {
 			target := []_platform{}
 			switch command {
 			case "build":
-				target = platformQuery(query)
+				found := false
+				if query == "" {
+					target, arguments = platformMatch(arguments)
+					found = len(target) > 0
+				}
+				if !found {
+					target = platformQuery(query)
+				}
 				failure = doBuild(target, arguments)
 			case "setup":
 				target = platformQuery(query)

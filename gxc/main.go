@@ -115,15 +115,27 @@ type _hostPlatform struct {
 }
 
 var (
-	flag_target       = flag.String("target", "", "The platforms to target (linux, windows/386, etc.)")
-	flag_bashrc       = flag.Bool("bashrc", false, "Emit bash aliases: go-all, go-build-all, go-linux-386, ...")
-	flag_exe          = flag.Bool("exe", false, "Add an .exe extension to files built for windows/*")
-	flag_stash        = flag.String("stash", "", "Directory to deposit built files into")
-	flag_quiet        = false // _GXC_QUIET
-	setupFlagSet      = flag.NewFlagSet("setup", flag.ExitOnError)
-	setupFlag_force   = setupFlagSet.Bool("force", false, "Force make.bash to run, even if it already has")
-	setupFlag_verbose = setupFlagSet.Bool("verbose", false, "Pass make.bash output to stdout/stderr (instead of logging)")
-	setupFlag_quiet   = setupFlagSet.Bool("quiet", false, "Quiet make.bash (redirect stdout/stderr > nil)")
+	flag_target = flag.String("target", "", "The platforms to target (linux, windows/386, etc.)")
+	flag_bashrc = flag.Bool("bashrc", false, "Emit bash aliases: go-all, go-build-all, go-linux-386, ...")
+	flag_exe    = flag.Bool("exe", false, "Add an .exe extension to files built for windows/*")
+	flag_stash  = flag.String("stash", "", "Directory to deposit built files into")
+	flag_quiet  = false // _GXC_QUIET
+)
+
+var (
+	setupFlag         = flag.NewFlagSet("setup", flag.ExitOnError)
+	setupFlag_force   = false
+	setupFlag_verbose = false
+	setupFlag_quiet   = false
+	_                 = func() byte {
+		setupFlag.BoolVar(&setupFlag_force, "force", setupFlag_force, "Force make.bash to run, even if it already has")
+		setupFlag.BoolVar(&setupFlag_force, "f", setupFlag_force, string(0))
+		setupFlag.BoolVar(&setupFlag_verbose, "verbose", setupFlag_verbose, "Pass make.bash output to stdout/stderr (instead of logging)")
+		setupFlag.BoolVar(&setupFlag_verbose, "v", setupFlag_verbose, string(0))
+		setupFlag.BoolVar(&setupFlag_quiet, "quiet", setupFlag_quiet, "Quiet make.bash (redirect stdout/stderr > nil)")
+		setupFlag.BoolVar(&setupFlag_quiet, "q", setupFlag_quiet, string(0))
+		return 0
+	}()
 )
 
 func usage() {
@@ -148,7 +160,7 @@ func usage() {
   Run make.bash for the specified platform (or every platform if none given)
 
     `))
-	setupFlagSet.PrintDefaults()
+	kilt.PrintDefaults(setupFlag)
 
 	fmt.Fprintf(os.Stderr, kilt.GraveTrim(`
 
@@ -385,8 +397,8 @@ func firstTimeSetup(target []_platform) {
 }
 
 func doSetup(target []_platform, arguments []string) (failure []_failure) {
-	setupFlagSet.Parse(arguments)
-	arguments = setupFlagSet.Args()
+	setupFlag.Parse(arguments)
+	arguments = setupFlag.Args()
 	if len(arguments) > 0 {
 		// e.g. $ gxc setup windows linux-amd64 freebsd-386
 		target = nil
@@ -402,7 +414,7 @@ func doSetup(target []_platform, arguments []string) (failure []_failure) {
 		if bulk && platform.native() {
 			continue
 		}
-		if *setupFlag_force {
+		if setupFlag_force {
 			os.Remove(platform.builtFile())
 		}
 		if platform.isReady() {
@@ -413,11 +425,11 @@ func doSetup(target []_platform, arguments []string) (failure []_failure) {
 		var stdout, stderr io.Writer
 		var log *os.File
 		emit := ""
-		if *setupFlag_verbose {
+		if setupFlag_verbose {
 			emit = "-"
 			stdout = os.Stdout
 			stderr = os.Stderr
-		} else if *setupFlag_quiet {
+		} else if setupFlag_quiet {
 		} else {
 			log, _ = ioutil.TempFile("", "make."+platform.major+"-"+platform.minor+".log.")
 			if log != nil {

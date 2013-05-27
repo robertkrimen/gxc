@@ -62,6 +62,7 @@ Usage
 */
 package main
 
+// TODO Check for presence of gcc
 // TODO Emit results as JSON for machine consumption?
 
 import (
@@ -394,7 +395,13 @@ func doSetup(target []_platform, arguments []string) (failure []_failure) {
 		}
 	}
 
+	// A bulk setup is doing more than one
+	bulk := len(target) > 1
+
 	for _, platform := range target {
+		if bulk && platform.native() {
+			continue
+		}
 		if *setupFlag_force {
 			os.Remove(platform.builtFile())
 		}

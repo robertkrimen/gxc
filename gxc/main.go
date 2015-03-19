@@ -653,7 +653,7 @@ func main() {
 		}
 
 		{
-			file, err := os.Open(filepath.Join(goRoot, "src", "pkg", "runtime"))
+			file, err := os.Open(filepath.Join(goRoot, "pkg"))
 			if err == nil {
 				files, err := file.Readdirnames(-1)
 				if err != nil {
